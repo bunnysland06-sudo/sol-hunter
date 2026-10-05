@@ -1,10 +1,11 @@
 """
-SOL HUNTER V6.3 - PYDROID3 LAB
+SOL HUNTER V6.3 - PYDROID3 LAB (WITH TELEGRAM NOTIFICATIONS)
 PAPER ONLY / READ-ONLY WALLET (UPGRADED)
 - Added Slippage & Fee simulation
 - Added Real-time isolated position refreshing
 - Added GoPlus API for Mint/Honeypot security checks
 - Added Reason logging
+- Added Telegram Notifications
 """
 import os, time, sqlite3, json
 from datetime import datetime, timezone
@@ -17,6 +18,10 @@ POSITION_SIZE = 5.0
 MAX_POSITIONS = 1
 SCAN_INTERVAL = 90
 DB_FILE = "sol_hunter_v6_3_pydroid.db"
+
+# Telegram Config (از Environment Variables خوانده می‌شود)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Simulated Realities
 SLIPPAGE = 0.02 # 2% slippage on entry and exit
@@ -48,6 +53,16 @@ THEMES = {
 S = requests.Session()
 S.headers.update({"User-Agent": "SOL-HUNTER/6.3-PYDROID"})
 
+# ================= TELEGRAM HELPER =================
+def send_telegram(msg):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        S.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=5)
+    except Exception as e:
+        print("⚠️ خطا در ارسال پیام به تلگرام:", repr(e))
+
 # ================= DATABASE =================
 def db():
     c = sqlite3.connect(DB_FILE)
@@ -71,14 +86,12 @@ def goplus_security_check(address):
         r = S.get(f"https://api.gopluslabs.io/api/v1/token_security/501?contract_addresses={address}", timeout=5)
         if r.status_code == 200:
             data = r.json().get("result", {}).get(address.lower(), {})
-            if not data: return True # API didn't have it, assume risky but don't hard block
-            
-            # If it's mintable or a honeypot, hard reject
+            if not data: return True
             if data.get("is_mintable") == "1" or data.get("is_honeypot") == "1":
                 return False
         return True
     except:
-        return True # Fallback if API fails
+        return True
 
 def normalize(p):
     b = p.get("baseToken") or {}
@@ -112,7 +125,6 @@ def discover():
     return list(out.values())
 
 def score(x):
-    # Security logic
     sec = 100
     if x["liquidity"] < MIN_LIQUIDITY: sec -= 25
     if x["pc5m"] > 35: sec -= 20
@@ -121,7 +133,6 @@ def score(x):
     if total and x["sells1"]/total > .55: sec -= 25
     sec = max(0, min(100, sec))
 
-    # Narrative logic
     text = (x["name"] + " " + x["symbol"]).lower()
     themes = [k for k, words in THEMES.items() if any(w in text for w in words)]
     nar = 35 + min(25, len(themes)*10)
@@ -129,13 +140,11 @@ def score(x):
     if x["buys5"] > x["sells5"]*1.5: nar += 7
     nar = min(100, nar)
 
-    # Smart logic
     sm = 30 + (x["buys1"]/total if total else 0)*45
     if x["buys5"] > x["sells5"]: sm += 10
     if x["buys5"] >= 8: sm += 8
     sm = min(100, sm)
 
-    # Timing logic
     tim = 100
     if x["age"] > 60: tim -= 12
     if x["age"] > 100: tim -= 20
@@ -158,7 +167,6 @@ def eligible(x, sc):
 def open_positions(c): return c.execute("SELECT * FROM positions WHERE status='OPEN'").fetchall()
 
 def refresh_open_positions(c):
-    """Fetches real-time prices specifically for open positions"""
     rows = open_positions(c)
     prices = {}
     for r in rows:
@@ -178,9 +186,9 @@ def paper_buy(c, x, sc):
     
     if not goplus_security_check(x["address"]):
         print(f"🚨 SECURITY REJECT: {x['symbol']} failed GoPlus checks (Mint/Honeypot).")
+        send_telegram(f"🚨 <b>هشدار امنیتی</b>\nتوکن {x['symbol']} در بررسی GoPlus به عنوان Mintable یا Honeypot شناسایی شد و رد شد.")
         return False
 
-    # Simulate execution reality
     real_entry_price = x["price"] * (1 + SLIPPAGE)
     capital_after_fee = POSITION_SIZE * (1 - DEX_FEE)
     qty = capital_after_fee / real_entry_price
@@ -189,7 +197,20 @@ def paper_buy(c, x, sc):
     c.execute("INSERT OR IGNORE INTO positions(address,symbol,entry,qty,peak,opened,reason) VALUES(?,?,?,?,?,?,?)", 
               (x["address"],x["symbol"],real_entry_price,qty,real_entry_price,datetime.now(timezone.utc).isoformat(),reason))
     c.commit()
-    print(f"\n🟢 PAPER BUY ${POSITION_SIZE:.2f} {x['symbol']} @ ${real_entry_price:.10f} (Incl. {SLIPPAGE*100}% slip & fee)")
+    
+    buy_msg = (
+        f"🟢 <b>سیگنال خرید جدید (Paper Buy)</b>\n\n"
+        f"🪙 <b>نماد:</b> ${x['symbol']}\n"
+        f"💵 <b>قیمت ورود:</b> ${real_entry_price:.10f}\n"
+        f"💰 <b>حجم پوزیشن:</b> ${POSITION_SIZE:.2f}\n"
+        f"📊 <b>امتیاز نهایی:</b> {sc['final']}/100\n"
+        f"🛡️ <b>امنیت:</b> {sc['security']} | <b>هوشمند:</b> {sc['smart']}\n"
+        f"⏱️ <b>سن توکن:</b> {x['age']:.1f} دقیقه\n"
+        f"💧 <b>نقدینگی:</b> ${x['liquidity']:,.0f}\n\n"
+        f"🔗 <a href='{x['url']}'>مشاهده در DexScreener</a>"
+    )
+    print(f"\n🟢 PAPER BUY ${POSITION_SIZE:.2f} {x['symbol']} @ ${real_entry_price:.10f}")
+    send_telegram(buy_msg)
     return True
 
 def manage(c):
@@ -201,13 +222,13 @@ def manage(c):
         if not price: continue
         
         peak = max(num(peak), price)
-        # Calculate real exit price with slippage
         real_exit_price = price * (1 - SLIPPAGE)
         gain = real_exit_price/entry - 1 if entry else 0
         
         if not recovered and gain >= RECOVERY_GAIN:
             recovered = 1
-            print(f"💰 RECOVERY +50%: {symbol} | principal considered recovered")
+            print(f"💰 RECOVERY +50%: {symbol}")
+            send_telegram(f"💰 <b>بازیابی اصل سرمایه (+50%)</b>\nتوکن: ${symbol}\nسود تا این لحظه: +{gain*100:.1f}%")
             
         stop = entry*(1-STOP_LOSS) if not recovered else peak*(1-TRAILING_STOP)
         
@@ -216,14 +237,24 @@ def manage(c):
             pnl = exit_capital - POSITION_SIZE
             c.execute("UPDATE positions SET peak=?, recovered=?, closed=?, status='CLOSED', pnl=? WHERE id=?", 
                       (peak,recovered,datetime.now(timezone.utc).isoformat(),pnl,pid)); c.commit()
+            
+            pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+            exit_msg = (
+                f"{pnl_emoji} <b>خروج از پوزیشن (Paper Exit)</b>\n\n"
+                f"🪙 <b>نماد:</b> ${symbol}\n"
+                f"💵 <b>قیمت خروج:</b> ${real_exit_price:.10f}\n"
+                f"📊 <b>PnL (سود/زیان):</b> ${pnl:.2f}\n"
+                f"📈 <b>بازدهی:</b> {gain*100:+.2f}%\n"
+            )
             print(f"🔴 PAPER EXIT {symbol} @ ${real_exit_price:.10f} | Final PnL ${pnl:.2f}")
+            send_telegram(exit_msg)
         else:
             c.execute("UPDATE positions SET peak=?, recovered=? WHERE id=?", (peak,recovered,pid)); c.commit()
 
 # ================= MAIN LOOP =================
 def run_once():
     c = db()
-    manage(c) # Manage BEFORE discovering new tokens so exits happen cleanly
+    manage(c)
     
     data = discover(); stats={"discovery":len(data),"basic":0,"security":0}
     scored=[]
@@ -252,6 +283,7 @@ def run_once():
 
 def main():
     print("🦈 SOL HUNTER V6.3 PYDROID3 STARTED — REALISTIC PAPER ENGINE")
+    send_telegram("🚀 <b>ربات SOL HUNTER روشن شد و شروع به اسکن نمود.</b>")
     while True:
         try: run_once()
         except KeyboardInterrupt: 
