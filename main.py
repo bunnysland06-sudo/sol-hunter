@@ -1,15 +1,27 @@
 """
-SOL HUNTER V6.3 - PYDROID3 LAB (WITH TELEGRAM NOTIFICATIONS)
-PAPER ONLY / READ-ONLY WALLET (UPGRADED)
-- Added Slippage & Fee simulation
-- Added Real-time isolated position refreshing
-- Added GoPlus API for Mint/Honeypot security checks
-- Added Reason logging
+SOL HUNTER V6.3 - PYDROID3 LAB (FREE RENDER WEB SERVICE VERSION)
+- Added Built-in HTTP Server for Render Free Tier Health Check
 - Added Telegram Notifications
 """
-import os, time, sqlite3, json
+import os, time, sqlite3, json, threading
 from datetime import datetime, timezone
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
+
+# ================= HTTP SERVER FOR RENDER FREE TIER =================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b"SOL HUNTER BOT IS ALIVE")
+    def log_message(self, format, *args):
+        return
+
+def start_health_check_server():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
 
 # ================= CONFIG =================
 PAPER_ONLY = True
@@ -19,13 +31,11 @@ MAX_POSITIONS = 1
 SCAN_INTERVAL = 90
 DB_FILE = "sol_hunter_v6_3_pydroid.db"
 
-# Telegram Config (از Environment Variables خوانده می‌شود)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# Simulated Realities
-SLIPPAGE = 0.02 # 2% slippage on entry and exit
-DEX_FEE = 0.01  # 1% standard Solana swap fee estimate
+SLIPPAGE = 0.02 
+DEX_FEE = 0.01  
 
 MIN_LIQUIDITY = 15000.0
 MIN_VOLUME_1H = 8000.0
@@ -35,7 +45,7 @@ MIN_SECURITY = 70
 MIN_SMART = 45
 MIN_NARRATIVE = 45
 MIN_TIMING = 60
-MIN_FINAL = 65 # Lowered slightly as GoPlus acts as the hard filter
+MIN_FINAL = 65 
 STOP_LOSS = 0.15
 RECOVERY_GAIN = 0.50
 TRAILING_STOP = 0.15
@@ -81,7 +91,6 @@ def age_min(pair):
     return max(0.0, (time.time()*1000 - num(ts))/60000)
 
 def goplus_security_check(address):
-    """Hard check for mintable and honeypot status via GoPlus"""
     try:
         r = S.get(f"https://api.gopluslabs.io/api/v1/token_security/501?contract_addresses={address}", timeout=5)
         if r.status_code == 200:
@@ -185,8 +194,8 @@ def paper_buy(c, x, sc):
     if x["price"] <= 0: return False
     
     if not goplus_security_check(x["address"]):
-        print(f"🚨 SECURITY REJECT: {x['symbol']} failed GoPlus checks (Mint/Honeypot).")
-        send_telegram(f"🚨 <b>هشدار امنیتی</b>\nتوکن {x['symbol']} در بررسی GoPlus به عنوان Mintable یا Honeypot شناسایی شد و رد شد.")
+        print(f"🚨 SECURITY REJECT: {x['symbol']} failed GoPlus checks.")
+        send_telegram(f"🚨 <b>هشدار امنیتی</b>\nتوکن {x['symbol']} رد شد.")
         return False
 
     real_entry_price = x["price"] * (1 + SLIPPAGE)
@@ -228,7 +237,7 @@ def manage(c):
         if not recovered and gain >= RECOVERY_GAIN:
             recovered = 1
             print(f"💰 RECOVERY +50%: {symbol}")
-            send_telegram(f"💰 <b>بازیابی اصل سرمایه (+50%)</b>\nتوکن: ${symbol}\nسود تا این لحظه: +{gain*100:.1f}%")
+            send_telegram(f"💰 <b>بازیابی اصل سرمایه (+50%)</b>\nتوکن: ${symbol}\nسود: +{gain*100:.1f}%")
             
         stop = entry*(1-STOP_LOSS) if not recovered else peak*(1-TRAILING_STOP)
         
@@ -243,7 +252,7 @@ def manage(c):
                 f"{pnl_emoji} <b>خروج از پوزیشن (Paper Exit)</b>\n\n"
                 f"🪙 <b>نماد:</b> ${symbol}\n"
                 f"💵 <b>قیمت خروج:</b> ${real_exit_price:.10f}\n"
-                f"📊 <b>PnL (سود/زیان):</b> ${pnl:.2f}\n"
+                f"📊 <b>PnL:</b> ${pnl:.2f}\n"
                 f"📈 <b>بازدهی:</b> {gain*100:+.2f}%\n"
             )
             print(f"🔴 PAPER EXIT {symbol} @ ${real_exit_price:.10f} | Final PnL ${pnl:.2f}")
@@ -282,8 +291,11 @@ def run_once():
     c.close()
 
 def main():
-    print("🦈 SOL HUNTER V6.3 PYDROID3 STARTED — REALISTIC PAPER ENGINE")
-    send_telegram("🚀 <b>ربات SOL HUNTER روشن شد و شروع به اسکن نمود.</b>")
+    # شروع وب‌سرور برای تأیید سلامت رندر رایگان
+    threading.Thread(target=start_health_check_server, daemon=True).start()
+    
+    print("🦈 SOL HUNTER V6.3 STARTED — FREE WEB SERVICE ENGINE")
+    send_telegram("🚀 <b>ربات SOL HUNTER روشن شد (پلن رایگان).</b>")
     while True:
         try: run_once()
         except KeyboardInterrupt: 
